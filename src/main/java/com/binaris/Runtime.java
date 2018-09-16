@@ -3,12 +3,18 @@ package com.binaris;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParseException;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.PrintStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import static spark.Spark.*;
-import java.io.StringWriter;
-import java.io.PrintWriter;
 
 class Health {
     public int concurrency;
@@ -81,11 +87,39 @@ class Invoker {
     }
 }
 
+class LogRecord {
+    public boolean isErr;
+    public String reqid;
+    public String msg;
+}
+
+class JsonLogStream extends PrintStream {
+    private FileOutputStream output;
+    private boolean err;
+    public JsonLogStream(FileOutputStream output, boolean err) {
+        super(output);
+        this.output = output;
+        this.err = err;
+    }
+
+    public void write(byte buf[], int off, int len) {
+        LogRecord record = new LogRecord();
+        record.msg = new String(buf, off, len);
+        record.isErr = this.err;
+        record.reqid = "unknown";
+        String wrapped = (new Gson()).toJson(record);
+        byte[] b = wrapped.getBytes(Charset.forName("UTF-8"));
+        super.write(b, 0, b.length);
+        super.write('\n');
+    }
+}
+
 public class Runtime {
     private static AtomicInteger concurrency = new AtomicInteger(0);
     private static AtomicInteger request_count = new AtomicInteger(0);
     private static String funcName;
     private static String entryPoint;
+    private static String logDir;
 
     private static String requiredEnvar(String name) {
         return requiredEnvar(name, null);
@@ -108,10 +142,29 @@ public class Runtime {
         port(Integer.parseInt(requiredEnvar("BOLT_PORT", "80")));
         funcName = requiredEnvar("BN_FUNCTION");
         entryPoint = requiredEnvar("BN_ENTRYPOINT");
+        logDir = requiredEnvar("BN_LOGDIR", "/logs");
+    }
+
+    private static boolean hookStdStreams() {
+        Path path = Paths.get(logDir, "std.log");
+        try {
+
+            FileOutputStream f = new FileOutputStream(path.toString());
+            System.setOut(new JsonLogStream(f, false));
+            System.setErr(new JsonLogStream(f, true));
+            return true;
+        } catch (FileNotFoundException e) {
+            System.err.println("/logs directory does not exist");
+            System.err.println(e.toString());
+            return false;
+        }
     }
 
     public static void main(String[] args) {
         configure();
+        if (!hookStdStreams()) {
+            return;
+        }
         spark.Route route = (req, res) -> {
             request_count.incrementAndGet();
             concurrency.incrementAndGet();
