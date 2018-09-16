@@ -23,9 +23,11 @@ class Health {
 
 class Invoker {
     private String entryPoint;
+    private ThreadLocal<String> reqId;
 
-    public Invoker(String entryPoint) {
+    public Invoker(String entryPoint, ThreadLocal<String> reqId) {
         this.entryPoint = entryPoint;
+        this.reqId = reqId;
     }
 
     public JsonElement tryDeserialize(String body) {
@@ -54,6 +56,7 @@ class Invoker {
             ret.put("errorCode", "ERR_NO_REQ_ID");
             return ret;
         }
+        this.reqId.set(id);
 
         BinarisRequest bReq = new BinarisRequest();
         bReq.id = id;
@@ -96,17 +99,20 @@ class LogRecord {
 class JsonLogStream extends PrintStream {
     private FileOutputStream output;
     private boolean err;
-    public JsonLogStream(FileOutputStream output, boolean err) {
+    private ThreadLocal<String> reqId;
+
+    public JsonLogStream(FileOutputStream output, boolean err, ThreadLocal<String> reqId) {
         super(output);
         this.output = output;
         this.err = err;
+        this.reqId = reqId;
     }
 
     public void write(byte buf[], int off, int len) {
         LogRecord record = new LogRecord();
         record.msg = new String(buf, off, len);
         record.isErr = this.err;
-        record.reqid = "unknown";
+        record.reqid = reqId.get();
         String wrapped = (new Gson()).toJson(record);
         byte[] b = wrapped.getBytes(Charset.forName("UTF-8"));
         super.write(b, 0, b.length);
@@ -120,6 +126,7 @@ public class Runtime {
     private static String funcName;
     private static String entryPoint;
     private static String logDir;
+    private static ThreadLocal<String> requestId = new ThreadLocal<String>();
 
     private static String requiredEnvar(String name) {
         return requiredEnvar(name, null);
@@ -150,8 +157,8 @@ public class Runtime {
         try {
 
             FileOutputStream f = new FileOutputStream(path.toString());
-            System.setOut(new JsonLogStream(f, false));
-            System.setErr(new JsonLogStream(f, true));
+            System.setOut(new JsonLogStream(f, false, requestId));
+            System.setErr(new JsonLogStream(f, true, requestId));
             return true;
         } catch (FileNotFoundException e) {
             System.err.println("/logs directory does not exist");
@@ -169,7 +176,7 @@ public class Runtime {
             request_count.incrementAndGet();
             concurrency.incrementAndGet();
             try {
-                Invoker invoker = new Invoker(entryPoint);
+                Invoker invoker = new Invoker(entryPoint, requestId);
                 Object ret = invoker.invoke(req, res);
                 return (new Gson()).toJson(ret);
             } finally {
