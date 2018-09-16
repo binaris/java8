@@ -23,7 +23,7 @@
 hs_err_pid*
 
 # Vim
-*.sw[n-z]
+.*.sw[a-p]
 
 .gradle
 build
